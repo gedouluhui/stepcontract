@@ -1,0 +1,43 @@
+{
+  "generated_at": "2026-11-17T21:03:18.516852+00:00",
+  "environment": "3.12.3 | packaged by conda-forge | (main, Apr 15 2024, 18:20:11) [MSC v.1938 64 bit (AMD64)]",
+  "dependency_mode": "local existing dependencies; project packages installed from fresh wheels into isolated targets",
+  "project": {
+    "tests": 25,
+    "wheel": "stepcontract-0.1.0-py3-none-any.whl",
+    "wheel_sha256": "b7b9feee11df5603203e0994c3a91bc3f895846b8529b770df77068904a815af",
+    "source_hashes": {
+      "src/stepcontract/__init__.py": "f162457fcebd1841d2ae1ccca1eaf0a3a1dd72ca039eb26a064acddc72313c45",
+      "src/stepcontract/__main__.py": "935a1c1166b0c1ea35a82256345000bf2c73ded718d77773bc27a71ecce28f7d",
+      "src/stepcontract/audit.py": "2e2f244e70f82cedd3de08c936b98d92392ded4f0171d52cbcb750e71ddf710e",
+      "src/stepcontract/cli.py": "cd3cf392319addaa1734e45dd6aa503ba27e4703eb818aa4b28d8376d47ba700",
+      "src/stepcontract/contract.py": "df2081cbbafe796bd49593acd57363b1919d6faf6720d3008045800e8320a27d",
+      "src/stepcontract/report.py": "008b6f18b246b0b6860099f836e7e3b2b4c11ae5de4edd3348c8c30ce7ac2212",
+      "src/stepcontract/snapshot.py": "d1014d3e14ccdbf4172234969dc712792304fba5c042787adcf0eaabef721aee",
+      "tests/test_audit.py": "60e11ef32a2acf99fb0820b986717651ec1dcae4a9babb369f2162bd108c8fd6",
+      "tests/test_cli.py": "8cdc89882f8d8a6f045bb73d75de584a9178575db4b971a2a0d964bb2a85c2ce",
+      "pyproject.toml": "bc069ed285dcbff66009515e3901fac31e7e39490debf11685b6a2702f04c9cc"
+    },
+    "installed_tests": "PASS",
+    "wheel_source_bytes": "MATCH"
+  },
+  "mutation": {
+    "project": "stepcontract",
+    "assertion": "test_missing_optimizer_parameter",
+    "result": "CAUGHT",
+    "source_unchanged": true
+  },
+  "visual": {
+    "project": "stepcontract",
+    "file": "stepcontract-bad.html",
+    "desktop_width": 1200,
+    "desktop_document_width": 1200,
+    "mobile_width": 360,
+    "mobile_document_width": 360,
+    "details_before": false,
+    "details_after": true,
+    "visible_evidence": "zero_grad/backward/zero_grad/step; early_zero_grad and accumulation_count",
+    "external_resource_entries": 0
+  },
+  "limits": "Basic visual and report interaction checks only. Not a screen-reader audit, real-phone test or cross-browser certification. Resource counts are browser Performance Resource Timing observations, not a general network-security proof."
+}
