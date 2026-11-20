@@ -1,5 +1,7 @@
 # StepContract
 
+[![CI](https://github.com/gedouluhui/stepcontract/actions/workflows/ci.yml/badge.svg)](https://github.com/gedouluhui/stepcontract/actions/workflows/ci.yml)
+
 **A parameter can have a gradient and still never reach your optimizer. Make the training intent explicit.**
 
 StepContract checks a small, visible PyTorch training window: parameter ownership, declared freezing/accumulation intent, and the sequence of `zero_grad`, `backward` and `step`. It is a contract checker, not another training dashboard.
