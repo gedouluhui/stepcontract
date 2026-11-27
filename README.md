@@ -80,3 +80,34 @@ python -m build --wheel
 Tests use real SGD and AdamW controls and verify identical parameter/gradient updates with and without the auditor, legal freezing and accumulation, missing optimizer parameters, early/external clearing, nonfinite gradients, residue, identity changes and CLI reports. See [local evidence](docs/IMPLEMENTATION.md). No production training or external adoption claim is made.
 
 Report bugs with a tiny synthetic training loop, not private model weights or datasets. AI-assisted implementation. MIT; PyTorch's own license remains applicable. This repository does not claim a PyPI release.
+
+## Quickstart and support
+
+### Problem
+Make training-step intent explicit so a parameter with a gradient cannot silently miss the optimizer or violate the declared step sequence.
+
+### Install
+```sh
+python -m pip install .
+```
+
+### Success
+```sh
+stepcontract demo --case healthy --html healthy.html
+```
+Expected: The healthy CPU training window completes with PASS and exit 0.
+
+### Deliberate failure
+```sh
+stepcontract demo --case missing-optimizer --html missing.html
+```
+Expected: The missing-optimizer control reports a contract violation and exits 1.
+
+### Evidence and coverage boundaries
+Evidence uses real SGD and AdamW controls, identical-update checks, legal freezing and accumulation, missing optimizer parameters, early/external clearing, nonfinite gradients, identity changes, and CLI reports. Coverage is limited to observed calls through the audit object; arbitrary external operations and whole-program correctness are not certified.
+
+### Support status
+Version 0.1.0 supports Python 3.10+ with CPU PyTorch and the scoped eager FP32 SGD/AdamW workflow. The documented route is a source checkout; no PyPI release is claimed. Maintenance is best-effort with no SLA.
+
+### Limitations
+Distributed training, AMP, compiled graphs, optimizer closures, differentiable/capturable/fused modes, and separate Parameter objects sharing storage are outside scope. Snapshots cost O(P), and names/shapes can be sensitive.
