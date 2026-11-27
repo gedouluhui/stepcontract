@@ -45,7 +45,7 @@ stepcontract demo --case missing-optimizer --html missing.html
 证据使用真实 SGD 与 AdamW 对照、相同更新检查、合法冻结与累积、缺失优化器参数、提前/外部清梯度、非有限梯度、身份变化和 CLI 报告。覆盖范围限于通过审计对象观察到的调用；不认证任意外部操作或整个程序的正确性。
 
 ### 支持状态
-版本 0.1.0 支持 Python 3.10+、CPU PyTorch，以及限定范围内的 eager FP32 SGD/AdamW 工作流。文档路径是源码检出；不声称已发布到 PyPI。维护为尽力而为，不提供 SLA。
+版本 0.1.1 支持 Python 3.10+、CPU PyTorch，以及限定范围内的 eager FP32 SGD/AdamW 工作流。文档路径是源码检出；不声称已发布到 PyPI。维护为尽力而为，不提供 SLA。
 
 ### 限制
 分布式训练、AMP、编译图、优化器 closure、可微分/可捕获/融合模式，以及共享存储的独立 Parameter 对象不在范围内。快照开销为 O(P)，名称和形状可能敏感。

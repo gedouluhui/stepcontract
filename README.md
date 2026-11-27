@@ -113,7 +113,7 @@ Expected: The missing-optimizer control reports a contract violation and exits 1
 Evidence uses real SGD and AdamW controls, identical-update checks, legal freezing and accumulation, missing optimizer parameters, early/external clearing, nonfinite gradients, identity changes, and CLI reports. Coverage is limited to observed calls through the audit object; arbitrary external operations and whole-program correctness are not certified.
 
 ### Support status
-Version 0.1.0 supports Python 3.10+ with CPU PyTorch and the scoped eager FP32 SGD/AdamW workflow. The documented route is a source checkout; no PyPI release is claimed. Maintenance is best-effort with no SLA.
+Version 0.1.1 supports Python 3.10+ with CPU PyTorch and the scoped eager FP32 SGD/AdamW workflow. The documented route is a source checkout; no PyPI release is claimed. Maintenance is best-effort with no SLA.
 
 ### Limitations
 Distributed training, AMP, compiled graphs, optimizer closures, differentiable/capturable/fused modes, and separate Parameter objects sharing storage are outside scope. Snapshots cost O(P), and names/shapes can be sensitive.
