@@ -1,9 +1,17 @@
 """Explicit, opt-in operation wrappers; no global hooks or hidden training."""
+from contextlib import contextmanager
 import copy
 import torch
 
 from .contract import UnsupportedOperation, Window, positive_int
-from .snapshot import gradient_kind, named_parameters, unique_parameters, validate_parameter
+from .snapshot import gradient_kind, named_parameters, unique_parameters
+
+
+def validate_optimizer_modes(optimizer):
+    if type(optimizer) not in (torch.optim.SGD, torch.optim.AdamW):
+        raise UnsupportedOperation('only unmodified torch.optim.SGD and AdamW are supported')
+    if any(g.get(k, False) for g in optimizer.param_groups for k in ('differentiable', 'capturable', 'fused')):
+        raise UnsupportedOperation('differentiable, capturable and fused optimizer modes are unsupported')
 
 
 class StepContract:
@@ -12,10 +20,7 @@ class StepContract:
         self.model, self.optimizer = model, optimizer
         self.window = Window(positive_int(accumulation_steps, 'accumulation_steps'))
         self.budget = positive_int(max_snapshot_bytes, 'max_snapshot_bytes')
-        if type(optimizer) not in (torch.optim.SGD, torch.optim.AdamW):
-            raise UnsupportedOperation('only unmodified torch.optim.SGD and AdamW are supported')
-        if any(g.get(k, False) for g in optimizer.param_groups for k in ('differentiable', 'capturable', 'fused')):
-            raise UnsupportedOperation('differentiable, capturable and fused optimizer modes are unsupported')
+        validate_optimizer_modes(optimizer)
         self.named = named_parameters(model)
         if (not isinstance(required_parameters, (list, tuple)) or not required_parameters
                 or any(not isinstance(n, str) for n in required_parameters)
@@ -32,8 +37,11 @@ class StepContract:
         self.unsupported = False
         self.changed = {}
         self.after_backward = {}
+        self._current_event = None
+        self._origin = 'construction'
         self.initial_ownership = self._ownership()
         self._check_identity()
+        self._origin = 'outside_event'
 
     def _ownership(self):
         counts = {}
@@ -43,11 +51,26 @@ class StepContract:
         return counts
 
     def _finding(self, rule, parameter, detail):
-        item = {'rule': rule, 'parameter': parameter, 'detail': detail, 'event_index': len(self.events)}
+        item = {'rule': rule, 'parameter': parameter, 'detail': detail,
+                'event_index': self._current_event, 'origin': self._origin}
         if not any(f['rule'] == rule and f['parameter'] == parameter for f in self.findings):
             self.findings.append(item)
 
+    @contextmanager
+    def _observation(self, origin, event=None):
+        previous = self._origin, self._current_event
+        self._origin, self._current_event = origin, event
+        try:
+            yield
+        finally:
+            self._origin, self._current_event = previous
+
     def _check_identity(self):
+        try:
+            validate_optimizer_modes(self.optimizer)
+        except UnsupportedOperation as exc:
+            self.unsupported = True
+            self._finding('unsupported_optimizer_mode', '', str(exc))
         current = named_parameters(self.model)
         if set(current) != set(self.named) or any(current.get(n) is not p for n, p in self.named.items()):
             self._finding('parameter_identity_changed', '', 'Model parameter names or identities changed after the contract was bound.')
@@ -67,17 +90,35 @@ class StepContract:
             if not p.requires_grad:
                 self._finding('required_parameter_frozen', name, 'A parameter declared trainable has requires_grad=False.')
         for identity, record in self.unique.items():
-            p = record['parameter']
             if ownership.get(identity, 0) > 1:
                 self._finding('duplicate_optimizer_parameter', record['names'][0], 'This Parameter has multiple optimizer ownership entries.')
 
-    def _event(self, kind, **extra):
+    @contextmanager
+    def _operation(self, kind, **extra):
         if len(self.events) >= 10000:
             raise ValueError('visible event limit reached; use a new audit session')
-        self._check_identity()
-        if self.unsupported:
-            raise UnsupportedOperation('model moved outside the supported observation scope; inspect report()')
-        self.events.append({'index': len(self.events), 'kind': kind, **extra})
+        with self._observation('preflight'):
+            self._check_identity()
+            if self.unsupported:
+                raise UnsupportedOperation('model or optimizer moved outside supported scope; inspect report()')
+        event = {'index': len(self.events), 'kind': kind, 'outcome': 'started',
+                 'operation_started': False, 'operation_returned': False, **extra}
+        self.events.append(event)
+        with self._observation('event', event['index']):
+            try:
+                yield
+            except UnsupportedOperation as exc:
+                self.unsupported = True
+                event['outcome'] = 'unsupported'
+                self._finding('unsupported_observation', '', str(exc))
+                raise
+            except Exception as exc:
+                self.failed_execution = True
+                event['outcome'] = 'failed'
+                self._finding('execution_error', '', type(exc).__name__)
+                raise
+            else:
+                event['outcome'] = 'completed'
 
     def _gradients(self):
         result = {}
@@ -94,83 +135,81 @@ class StepContract:
         return result
 
     def _execute(self, operation):
-        try:
-            if self.unsupported:
-                raise UnsupportedOperation('operation refused outside supported observation scope')
-            return operation()
-        except UnsupportedOperation:
-            self.unsupported = True
-            raise
-        except Exception as exc:
-            self.failed_execution = True
-            self._finding('execution_error', '', type(exc).__name__)
-            raise
+        if self.unsupported:
+            raise UnsupportedOperation('operation refused outside supported observation scope')
+        event = self.events[self._current_event]
+        event['operation_started'] = True
+        result = operation()
+        event['operation_returned'] = True
+        return result
 
     def zero_grad(self, set_to_none=True):
         if type(set_to_none) is not bool:
             raise ValueError('set_to_none must be boolean')
-        self._event('zero_grad', set_to_none=set_to_none)
-        if self.window.clear():
-            self._finding('early_zero_grad', '', 'zero_grad was called after backward and before optimizer step; pending gradients were discarded.')
-        return self._execute(lambda: self.optimizer.zero_grad(set_to_none=set_to_none))
+        with self._operation('zero_grad', set_to_none=set_to_none):
+            if self.window.clear():
+                self._finding('early_zero_grad', '', 'zero_grad was called after backward and before optimizer step; pending gradients were discarded.')
+            return self._execute(lambda: self.optimizer.zero_grad(set_to_none=set_to_none))
 
     def backward(self, loss):
-        self._event('backward')
-        before = self._gradients()
-        if self.window.backward_count:
-            for identity, kind in before.items():
-                if self.after_backward.get(identity) == 'nonzero' and kind in ('none', 'zero'):
-                    self._finding('gradient_disappeared', self.unique[identity]['names'][0],
-                                  'A nonzero gradient became absent/zero between accumulated backward calls; the intervening cause is unobserved.')
-        if self.window.backward_count == 0 and not self.window.cleared:
-            for identity, kind in before.items():
-                if kind in ('nonzero', 'nonfinite'):
-                    self._finding('residual_gradient', self.unique[identity]['names'][0],
-                                  'Nonzero gradient was present at the start of a new declared accumulation window.')
-        self._execute(lambda: loss.backward())
-        self.window.backward()
-        self.after_backward = self._gradients()
+        with self._operation('backward'):
+            before = self._gradients()
+            if self.window.backward_count:
+                for identity, kind in before.items():
+                    if self.after_backward.get(identity) == 'nonzero' and kind in ('none', 'zero'):
+                        self._finding('gradient_disappeared', self.unique[identity]['names'][0],
+                                      'A nonzero gradient became absent/zero between accumulated backward calls; the intervening cause is unobserved.')
+            if self.window.backward_count == 0 and not self.window.cleared:
+                for identity, kind in before.items():
+                    if kind in ('nonzero', 'nonfinite'):
+                        self._finding('residual_gradient', self.unique[identity]['names'][0],
+                                      'Nonzero gradient was present at the start of a new declared accumulation window.')
+            self._execute(lambda: loss.backward())
+            self.window.backward()
+            self.after_backward = self._gradients()
 
     def step(self):
-        self._event('step', backward_count=self.window.backward_count)
-        if self.window.backward_count != self.window.accumulation_steps:
-            self._finding('accumulation_count', '', 'Expected %d backward calls, observed %d.' %
-                          (self.window.accumulation_steps, self.window.backward_count))
-        now = self._gradients()
-        for identity, kind in now.items():
-            previous = self.after_backward.get(identity)
-            if previous == 'nonzero' and kind in ('none', 'zero') and self.window.backward_count:
-                self._finding('gradient_disappeared', self.unique[identity]['names'][0],
-                              'A nonzero gradient after backward became absent/zero before step; the intervening cause is unobserved.')
-        # Recheck the budget because tensor storage sizes can change in place.
-        needed = sum(r['parameter'].numel() * r['parameter'].element_size() for r in self.unique.values())
-        if needed > self.budget:
-            self.failed_execution = True
-            raise ValueError('parameter snapshot exceeds budget')
-        before = {identity: r['parameter'].detach().clone() for identity, r in self.unique.items()}
-        result = self._execute(self.optimizer.step)
-        for identity, record in self.unique.items():
-            p = record['parameter'].detach()
-            self.changed[identity] = not torch.equal(before[identity], p)
-            if not bool(torch.isfinite(p).all()):
-                self._finding('nonfinite_parameter', record['names'][0], 'Parameter contains NaN or infinity after step.')
-        self.window.step()
-        return result
+        with self._operation('step', backward_count=self.window.backward_count):
+            if self.window.backward_count != self.window.accumulation_steps:
+                self._finding('accumulation_count', '', 'Expected %d backward calls, observed %d.' %
+                              (self.window.accumulation_steps, self.window.backward_count))
+            now = self._gradients()
+            for identity, kind in now.items():
+                previous = self.after_backward.get(identity)
+                if previous == 'nonzero' and kind in ('none', 'zero') and self.window.backward_count:
+                    self._finding('gradient_disappeared', self.unique[identity]['names'][0],
+                                  'A nonzero gradient after backward became absent/zero before step; the intervening cause is unobserved.')
+            needed = sum(r['parameter'].numel() * r['parameter'].element_size() for r in self.unique.values())
+            if needed > self.budget:
+                raise ValueError('parameter snapshot exceeds budget')
+            before = {identity: r['parameter'].detach().clone() for identity, r in self.unique.items()}
+            result = self._execute(self.optimizer.step)
+            changed = {}
+            for identity, record in self.unique.items():
+                p = record['parameter'].detach()
+                changed[identity] = not torch.equal(before[identity], p)
+                if not bool(torch.isfinite(p).all()):
+                    self._finding('nonfinite_parameter', record['names'][0], 'Parameter contains NaN or infinity after step.')
+            self.changed = changed
+            self.snapshot_bytes = needed
+            self.window.step()
+            return result
 
     def report(self):
-        self._check_identity()
-        gradients = self._gradients()
-        status = ('ERROR' if self.failed_execution else 'UNSUPPORTED' if self.unsupported else
-                  'FAIL' if self.findings else 'INCOMPLETE' if self.window.backward_count or not self.window.steps else 'PASS')
-        ownership = self._ownership()
-        parameters = [{'names': r['names'], 'shape': list(r['parameter'].shape),
-                       'requires_grad': bool(r['parameter'].requires_grad),
-                       'optimizer_memberships': ownership.get(identity, 0),
-                       'gradient': gradients[identity], 'changed_last_step': self.changed.get(identity)}
-                      for identity, r in self.unique.items()]
-        return copy.deepcopy({'schema_version': 1, 'tool': 'stepcontract', 'version': '0.1.0', 'status': status,
-                              'intent': {'required_parameters': self.required, 'accumulation_steps': self.window.accumulation_steps},
-                              'events': self.events, 'parameters': parameters, 'findings': self.findings,
-                              'summary': {'completed_steps': self.window.steps, 'unique_parameters': len(self.unique),
-                                          'snapshot_bytes': self.snapshot_bytes},
-                              'scope': 'Only explicit wrapper calls and bound CPU FP32 model parameters are observed. No AMP, distributed or compiled-graph certification; no assertion of global training correctness.'})
+        with self._observation('report'):
+            self._check_identity()
+            gradients = self._gradients()
+            status = ('ERROR' if self.failed_execution else 'UNSUPPORTED' if self.unsupported else
+                      'FAIL' if self.findings else 'INCOMPLETE' if self.window.backward_count or not self.window.steps else 'PASS')
+            ownership = self._ownership()
+            parameters = [{'names': r['names'], 'shape': list(r['parameter'].shape),
+                           'requires_grad': bool(r['parameter'].requires_grad),
+                           'optimizer_memberships': ownership.get(identity, 0),
+                           'gradient': gradients[identity], 'changed_last_step': self.changed.get(identity)}
+                          for identity, r in self.unique.items()]
+            return copy.deepcopy({'schema_version': 1, 'tool': 'stepcontract', 'version': '0.1.1', 'status': status,
+                                  'intent': {'required_parameters': self.required, 'accumulation_steps': self.window.accumulation_steps},
+                                  'events': self.events, 'parameters': parameters, 'findings': self.findings,
+                                  'summary': {'completed_steps': self.window.steps, 'unique_parameters': len(self.unique),
+                                              'snapshot_bytes': self.snapshot_bytes},
+                                  'scope': 'Only accepted explicit wrapper calls and bound CPU FP32 model parameters are observed. Rejected pre-admission calls are not certified. No AMP, distributed or compiled-graph certification; no assertion of global training correctness.'})
