@@ -51,19 +51,25 @@ For gradient accumulation, specify `accumulation_steps=2`, call `backward` twice
 - Exact before/after comparisons distinguish changes that a norm-only check could miss. Aliases of the same Parameter are counted once.
 - Reports contain names, shapes, ownership and observations, **not weight arrays, raw gradients or training examples**.
 
+### Accepted calls, outcomes and provenance
+
+Validation that happens **before** an event is admitted — a non-boolean `set_to_none`, the event-history cap, or an unsupported optimizer mode found at preflight — raises without starting an operation, without consuming history and without retroactively invalidating completed steps. Such a rejected call has no event index, and a historical PASS does not certify it.
+
+Once a call is admitted, its event records `operation_started` and `operation_returned`, and `outcome` is `completed`, `failed` or `unsupported`. Every finding carries its `event_index` or `null` plus an `origin` (`construction`, `event` or `report`), so each claim resolves to a real observation instead of an invented index. If the exact pre-step snapshot cannot be taken, the optimizer is not called, `completed_steps` does not increase and the failure stays visible. After the first exception in an accepted event, the audit is **sticky ERROR**: a later successful retry cannot restore PASS.
+
 | Status | Meaning |
 |---|---|
 | PASS | Completed visible window with no detected conflict against declared intent. |
 | FAIL | Contract violation or nonfinite value observed. |
 | INCOMPLETE | No completed step, or backward work still pending. |
-| ERROR | A wrapped operation failed. Its exception is re-raised to preserve caller error handling. |
+| ERROR | An accepted wrapped operation failed. Its exception is re-raised to preserve caller error handling, and the report stays ERROR for the lifetime of the audit. |
 | UNSUPPORTED | Unsupported observation mode. Constructor/preflight may raise `UnsupportedOperation`. |
 
 CLI exit codes: PASS 0, FAIL 1, ERROR 2, INCOMPLETE 3, UNSUPPORTED 4.
 
 ## Scope, cost and non-goals
 
-v0.1 supports **CPU dense contiguous FP32 parameters, single-process eager execution, unmodified SGD/AdamW**, with no optimizer closure. Differentiable/capturable/fused modes, AMP, distributed training, compiled graphs and separate Parameter objects sharing storage are outside scope.
+v0.1.1 supports **CPU dense contiguous FP32 parameters, single-process eager execution, unmodified SGD/AdamW**, with no optimizer closure. Differentiable/capturable/fused modes, AMP, distributed training, compiled graphs and separate Parameter objects sharing storage are outside scope.
 
 Only calls through the audit object are tracked. Arbitrary external operations, optimizer hooks and concurrent training are not certified. This tool does not prove the optimizer's recurrence, model quality, convergence or whole-program correctness.
 
@@ -79,6 +85,37 @@ python -m pip install build
 python -m build --wheel
 ```
 
-Tests use real SGD and AdamW controls and verify identical parameter/gradient updates with and without the auditor, legal freezing and accumulation, missing optimizer parameters, early/external clearing, nonfinite gradients, residue, identity changes and CLI reports. See [local evidence](docs/IMPLEMENTATION.md). No production training or external adoption claim is made.
+Tests use real SGD and AdamW controls and verify identical parameter/gradient updates with and without the auditor, legal freezing and accumulation, missing optimizer parameters, early/external clearing, nonfinite gradients, residue, identity changes, accepted-event failure and retry provenance, runtime optimizer-mode refusal and CLI reports. See [local evidence](docs/IMPLEMENTATION.md). No production training or external adoption claim is made.
 
 Report bugs with a tiny synthetic training loop, not private model weights or datasets. AI-assisted implementation. MIT; PyTorch's own license remains applicable. This repository does not claim a PyPI release.
+
+## Quickstart and support
+
+### Problem
+Make training-step intent explicit so a parameter with a gradient cannot silently miss the optimizer or violate the declared step sequence.
+
+### Install
+```sh
+python -m pip install .
+```
+
+### Success
+```sh
+stepcontract demo --case healthy --html healthy.html
+```
+Expected: The healthy CPU training window completes with PASS and exit 0.
+
+### Deliberate failure
+```sh
+stepcontract demo --case missing-optimizer --html missing.html
+```
+Expected: The missing-optimizer control reports a contract violation and exits 1.
+
+### Evidence and coverage boundaries
+Evidence uses real SGD and AdamW controls, identical-update checks, legal freezing and accumulation, missing optimizer parameters, early/external clearing, nonfinite gradients, identity changes, and CLI reports. Coverage is limited to observed calls through the audit object; arbitrary external operations and whole-program correctness are not certified.
+
+### Support status
+Version 0.1.1 supports Python 3.10+ with CPU PyTorch and the scoped eager FP32 SGD/AdamW workflow. The documented route is a source checkout; no PyPI release is claimed. Maintenance is best-effort with no SLA.
+
+### Limitations
+Distributed training, AMP, compiled graphs, optimizer closures, differentiable/capturable/fused modes, and separate Parameter objects sharing storage are outside scope. Snapshots cost O(P), and names/shapes can be sensitive.
